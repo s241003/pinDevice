@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>行きたい場所を教えてください</title>
+<style>
+  body { font-family: sans-serif; font-size: 20px; line-height: 1.6; margin: 0; padding: 16px; background: #fff; color: #111; }
+  h1 { font-size: 26px; }
+  button { font-size: 22px; padding: 16px 20px; margin: 8px 4px; min-width: 44%; border-radius: 12px; border: 2px solid #111; background: #fff; }
+  button.primary { background: #111; color: #fff; }
+  input[type=text] { font-size: 22px; padding: 12px; width: 100%; box-sizing: border-box; }
+  .card { border: 2px solid #111; border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .small { font-size: 16px; color: #444; }
+  #status { font-weight: bold; }
+  .cand { border: 1px solid #888; border-radius: 8px; padding: 12px; margin: 8px 0; }
+  .cand b { font-size: 22px; }
+</style>
+</head>
+<body>
+<h1>行きたい場所を教えてください</h1>
+<p id="status">「はじめる」を押すと、音声で聞きます。</p>
+
+<div>
+  <button id="startBtn" class="primary">はじめる</button>
+  <button id="locBtn">現在地を使う</button>
+</div>
+
+<div class="card">
+  <label for="textInput">文字で入力するときはこちら</label>
+  <input type="text" id="textInput" placeholder="例：柏駅、ららぽーと柏の葉" autocomplete="off">
+  <button id="searchBtn" class="primary">検索する</button>
+  <p class="small">音声が使えないとき（Firefoxなど）は、こちらから文字で入力できます。</p>
+</div>
+
+<div id="heard" class="card" hidden>
+  <div>聞き取った言葉：<b id="heardText"></b></div>
+</div>
+
+<div id="candidates" hidden>
+  <h2>見つかった場所</h2>
+  <div id="candList"></div>
+  <p class="small">近い順に並んでいます。いちばん上がいちばん近い候補です。</p>
+</div>
+
+<div id="confirmBox" class="card" hidden>
+  <div>行き先の候補：<b id="confirmName"></b></div>
+  <div id="confirmAddr" class="small"></div>
+  <div id="confirmDist" class="small"></div>
+  <p>ここへの案内を始めてよろしければ「案内開始」、ちがう場合は「ちがう」と言ってください。</p>
+  <button id="goBtn" class="primary">案内開始</button>
+  <button id="noBtn">ちがう</button>
+  <button id="retryBtn">もういちど言う</button>
+</div>
+
+<div id="doneBox" class="card" hidden>
+  <div><b>Piに送りました。</b></div>
+  <div>行き先：<b id="doneName"></b></div>
+  <div class="small" id="doneDetail"></div>
+  <p>案内を開始します。デバイスを持ってお待ちください。</p>
+  <button id="againBtn">別の場所にする</button>
+</div>
+
+<p class="small" id="note"></p>
+
+<script>
+"use strict";
+// 状態
+let candidates = [];   // Nominatim の結果（近い順）
+let candIndex = 0;      // 今提示している候補の番号
+let phonePos = null;    // {lat, lon} スマホの現在地（許可されたときだけ）
+let listeningFor = null; // "place" | "confirm" | null
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), noteEl = $("note");
+
+function setStatus(t) { statusEl.textContent = t; }
+
+// ---------- 読み上げ ----------
+function speak(text) {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window)) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ja-JP"; u.rate = 1.0;
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    u.onend = finish; u.onerror = finish;
+    window.speechSynthesis.speak(u);
+    setTimeout(finish, 8000); // 読み上げが終わらないときの保険
+  });
+}
+
+// ---------- 音声認識 ----------
+function makeRecognizer() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = "ja-JP"; r.interimResults = false; r.maxAlternatives = 1;
+  return r;
+}
+function listenOnce() {
+  return new Promise((resolve, reject) => {
+    const r = makeRecognizer();
+    if (!r) { reject(new Error("このブラウザでは音声認識が使えません。文字で入力してください。")); return; }
+    r.onresult = (e) => resolve(e.results[0][0].transcript.trim());
+    r.onerror = (e) => reject(new Error("音声認識のエラー: " + e.error));
+    r.onend = () => {};
+    try { r.start(); } catch (e) { reject(e); }
+    setTimeout(() => { try { r.stop(); } catch (e) {} }, 15000);
+  });
+}
+function norm(s) {
+  return (s || "").replace(/[\s　、。！？!?.、]/g, "").replace(/ー/g, "");
+}
+function hearsGo(text) {
+  const t = norm(text);
+  return t.includes("案内開始") || t === "開始" || t.includes("はい") || t.includes("お願いします");
+}
+function hearsNo(text) {
+  const t = norm(text);
+  return t.includes("ちがう") || t.includes("違う") || t.includes("ちがいます") || t.includes("違います");
+}
+function hearsNext(text) {
+  const t = norm(text);
+  return t.includes("つぎ") || t.includes("次");
+}
+
+// ---------- 地名検索（Nominatim / OpenStreetMap、APIキー不要） ----------
+// 注意：Nominatim は住所・施設名の検索に使う。1秒に1回までの利用が目安。
+async function searchPlace(query) {
+  const params = new URLSearchParams({
+    format: "jsonv2", limit: "5", countrycodes: "jp",
+    addressdetails: "1", "accept-language": "ja",
+    q: query,
+  });
+  if (phonePos) {
+    // 現在地のまわりを優先する（絞り込みではなく、並べ替えに使う）
+    params.set("viewbox", `${phonePos.lon - 0.1},${phonePos.lat + 0.1},${phonePos.lon + 0.1},${phonePos.lat - 0.1}`);
+  }
+  const res = await fetch("https://nominatim.openstreetmap.org/search?" + params.toString(), {
+    headers: { "Accept": "application/json" },
+  });
+  if (!res.ok) throw new Error("検索に失敗しました（通信エラー）");
+  const list = await res.json();
+  // 現在地が分かれば近い順に並べ替える。分からなければ検索結果の順番のまま。
+  if (phonePos && list.length > 1) {
+    list.sort((a, b) => distM(phonePos, a) - distM(phonePos, b));
+  }
+  return list.map((it) => ({
+    name: it.display_name.split(",")[0],
+    display_name: it.display_name,
+    lat: parseFloat(it.lat), lon: parseFloat(it.lon),
+    place_id: String(it.place_id || ""),
+    distM: phonePos ? distM(phonePos, it) : null,
+  }));
+}
+function distM(from, it) {
+  const R = 6371008.8, rad = Math.PI / 180;
+  const dLat = (parseFloat(it.lat) - from.lat) * rad;
+  const dLon = (parseFloat(it.lon) - from.lon) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(from.lat * rad) * Math.cos(parseFloat(it.lat) * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function fmtDist(m) {
+  if (m == null) return "";
+  if (m < 1000) return "現在地から約" + Math.round(m) + "m";
+  return "現在地から約" + (m / 1000).toFixed(1) + "km";
+}
+
+// ---------- 画面 ----------
+function showCandidates() {
+  $("candidates").hidden = false;
+  $("candList").innerHTML = "";
+  candidates.forEach((c, i) => {
+    const d = document.createElement("div");
+    d.className = "cand";
+    d.innerHTML = `<b>${i + 1}. ${escapeHtml(c.name)}</b><br><span class="small">${escapeHtml(c.display_name)}</span><br><span class="small">${escapeHtml(fmtDist(c.distM))}</span>`;
+    $("candList").appendChild(d);
+  });
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function showConfirm() {
+  const c = candidates[candIndex];
+  $("confirmBox").hidden = false;
+  $("confirmName").textContent = c.name;
+  $("confirmAddr").textContent = c.display_name;
+  $("confirmDist").textContent = fmtDist(c.distM);
+}
+
+// ---------- 流れ ①〜④ ----------
+async function askPlace() {
+  $("confirmBox").hidden = true; $("doneBox").hidden = true; $("candidates").hidden = true;
+  setStatus("行きたい場所を教えてください。");
+  await speak("行きたい場所を教えてください。");
+  setStatus("聞いています… 場所の名前を言ってください。");
+  try {
+    const heard = await listenOnce();
+    $("heard").hidden = false; $("heardText").textContent = heard;
+    await doSearch(heard);
+  } catch (e) {
+    setStatus(e.message);
+    await speak("聞き取れませんでした。もういちどお願いします。");
+  }
+}
+async function doSearch(query) {
+  setStatus("「" + query + "」を検索しています…");
+  let list;
+  try {
+    list = await searchPlace(query);
+  } catch (e) {
+    setStatus("検索に失敗しました。もういちどお願いします。");
+    await speak("検索に失敗しました。もういちどお願いします。");
+    return;
+  }
+  if (!list.length) {
+    setStatus("見つかりませんでした。もういちどお願いします。");
+    await speak("見つかりませんでした。もういちどお願いします。");
+    return;
+  }
+  candidates = list; candIndex = 0;
+  showCandidates();
+  await confirmCurrent();
+}
+async function confirmCurrent() {
+  const c = candidates[candIndex];
+  showConfirm();
+  const msg = `${c.name}に行きます。ここへの案内を始めてよろしければ、案内開始と言ってください。`;
+  setStatus(msg);
+  await speak(msg);
+  setStatus("「案内開始」か「ちがう」と言ってください。");
+  try {
+    const heard = await listenOnce();
+    if (hearsGo(heard)) { await sendDestination(c); return; }
+    if (hearsNo(heard) || hearsNext(heard)) { onNo(); return; }
+    // どちらでもない言葉のときは、もういちど確認を聞く
+    setStatus("「" + heard + "」と聞き取りました。「案内開始」か「ちがう」と言ってください。");
+    await speak("案内開始か、ちがうと言ってください。");
+    const heard2 = await listenOnce();
+    if (hearsGo(heard2)) { await sendDestination(c); return; }
+    onNo();
+  } catch (e) {
+    setStatus("聞き取れませんでした。画面のボタンでも選べます。");
+  }
+}
+function onNo() {
+  if (candIndex + 1 < candidates.length) {
+    candIndex += 1;
+    confirmCurrent();
+  } else {
+    speak("もういちどお願いします。").then(() => askPlace());
+  }
+}
+async function sendDestination(c) {
+  setStatus("Piに送っています…");
+  const body = { name: c.name, display_name: c.display_name, lat: c.lat, lon: c.lon, place_id: c.place_id, query: $("heardText").textContent || "" };
+  let res;
+  try {
+    res = await fetch("/destination", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) {
+    setStatus("Piに送れませんでした。同じWi-Fiにつながっているか確かめてください。");
+    await speak("Piに送れませんでした。");
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setStatus("Piが受け取れませんでした：" + (data.error || res.status));
+    await speak("Piが受け取れませんでした。");
+    return;
+  }
+  $("confirmBox").hidden = true;
+  $("doneBox").hidden = false;
+  $("doneName").textContent = data.destination.name;
+  $("doneDetail").textContent = `緯度 ${data.destination.lat}、経度 ${data.destination.lon}（${data.destination.updated_at}）`;
+  setStatus("案内を開始します。デバイスを持ってお待ちください。");
+  await speak("案内を開始します。デバイスを持ってお待ちください。");
+}
+
+// ---------- ボタン ----------
+$("startBtn").addEventListener("click", () => { askPlace(); });
+$("retryBtn").addEventListener("click", () => { askPlace(); });
+$("againBtn").addEventListener("click", () => { $("doneBox").hidden = true; askPlace(); });
+$("goBtn").addEventListener("click", () => { if (candidates[candIndex]) sendDestination(candidates[candIndex]); });
+$("noBtn").addEventListener("click", () => { onNo(); });
+$("searchBtn").addEventListener("click", async () => {
+  const q = $("textInput").value.trim();
+  if (!q) { setStatus("場所の名前を入力してください。"); return; }
+  $("heard").hidden = false; $("heardText").textContent = q;
+  await doSearch(q);
+});
+$("locBtn").addEventListener("click", () => {
+  if (!navigator.geolocation) { noteEl.textContent = "このブラウザでは位置情報が使えません。"; return; }
+  navigator.geolocation.getCurrentPosition(
+    (p) => { phonePos = { lat: p.coords.latitude, lon: p.coords.longitude }; noteEl.textContent = "現在地を使います（候補を近い順に並べます）。"; },
+    () => { noteEl.textContent = "位置情報が許可されませんでした。近い順の並べ替えはしません。"; },
+    { timeout: 8000 }
+  );
+});
+
+// 起動時の表示
+if (!makeRecognizer()) {
+  noteEl.textContent = "このブラウザでは音声認識が使えません。文字で入力してください。読み上げは使える場合があります。";
+} else {
+  noteEl.textContent = "音声認識：Chrome（Android・パソコン）と Safari（iPhone・Mac）で動きます。Firefox では使えません。音声は Google / Apple のサーバに送られます。";
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[Unit]
+Description=kaken
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=akito
+SupplementaryGroups=gpio i2c dialout docker
+WorkingDirectory=/home/akito/Project
+# Valhalla コンテナを起動し、/status が応答するまで待つ
+ExecStartPre=/usr/bin/docker start valhalla_gis-ops
+ExecStartPre=/bin/bash -c 'until curl -sf http://localhost:8002/status >/dev/null; do sleep 2; done'
+TimeoutStartSec=300
+ExecStart=/home/akito/Project/Yuru3/bin/activate -u main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
