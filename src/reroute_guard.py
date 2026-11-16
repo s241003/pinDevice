@@ -13,7 +13,7 @@
 from main import REROUTE_THRESHOLD_M
 # --- 閾値 (提案値。現場テストで確かめること) ---
 REROUTE_CONFIRM_COUNT = 3       # 何回連続で超えたら再ルートするか
-REROUTE_MIN_INTERVAL_SEC = 10.0  # 再ルートと再ルートのあいだの最短間隔
+REROUTE_MIN_INTERVAL_SEC = 30.0  # 再ルートと再ルートのあいだの最短間隔
 REROUTE_MAX_FAILURES = 3        # 連続で失敗したら再ルートを止める
 SAME_ROUTE_BEARING_DEG = 22.5   # 最初の20mの方位差がこれ以内なら同じ経路
 SAME_ROUTE_DIST_RATIO = 0.10    # 総距離の差がこれ以内なら同じ経路

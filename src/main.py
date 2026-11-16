@@ -12,7 +12,6 @@ from pyproj import Transformer
 from turn_map import extract_corners
 from vincenty import vincenty_inverse
 from cornerGuide import *
-from reroute_guard import is_same_route,RerouteGuard
 from userDirection import HeadingReader
 from decideSolenoids import whichSolenoid
 from lookahead import target_bearing
@@ -41,7 +40,8 @@ MAP_TILE="voyager"
 DESTINATION_FILE = os.path.join(BASE_DIR, "destination.json")
 DESTINATION = [35.892690,139.941418]
 COSTING = "pedestrian"
-REROUTE_THRESHOLD_M = 20      # 逸脱とみなす距離の閾値(m) ※reroute_guard の REROUTE_CONFIRM_M=20 と揃える
+REROUTE_THRESHOLD_M = 20      # 逸脱とみなす距離の閾値(m)
+from reroute_guard import is_same_route,RerouteGuard
 POLL_INTERVAL_SEC = 1.0       # 更新間隔(s)  GNSS(1Hz)にあわせる
 SNAP_RADIUS_M=50              # GPS始点とマップ始点の距離の許容範囲(m)
 TIMEOUT_SEC = 10              # 応答が遅すぎると判断する時間(s)
