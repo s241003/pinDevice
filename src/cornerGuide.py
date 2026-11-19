@@ -10,12 +10,10 @@ CORNER_HEADING_THRESH = 30.0   # ユーザがむいてる向きと経路の向�
 
 
 _corner_active = False
-_passed_idx = -1
 
 def reset_corner_state():
-    global _corner_active, _passed_idx
+    global _corner_active
     _corner_active = False
-    _passed_idx = -1
 
 def blink_level(remain_m):
     if remain_m <= 5.0:
@@ -34,33 +32,34 @@ def route_remaining_to_corner(pos,cur_edge_idx,route,corner):
 
     return remain
 
-def get_next_corner(route,cur_idx):
-    """現在エッジより先に存在する最初のコーナー"""
+def get_next_corner(route,cur_idx,pos):
+    """位置から見て、まだ過ぎていない最初のコーナーを返す。
+
+    通過したコーナーを記録する方式 (_passed_idx) はやめた。
+    コーナーまでの残距離 remain が正である間は「まだ先にある」と判断し、
+    残距離が 0 以下になったら「過ぎた」と判断する。毎回位置から決め直すので、
+    コーナーを過ぎてから引き返して再び近づけば、警告は復活する。
+    """
     if not route["corners"]:
         return None
-    cur_dist =  route["distances"][cur_idx]
-    future = [c for c in route["corners"] if c["cumul_dist_m"] > cur_dist]
+    for corner in sorted(route["corners"], key=lambda c: c["cumul_dist_m"]):
+        if route_remaining_to_corner(pos, cur_idx, route, corner) > 0:
+            return corner
+    return None
 
-    if not future:
-        return None
-
-    return min(future,key=lambda c: c["cumul_dist_m"])
-
-def get_guidance_mode(pos, cur_edge_idx, route):
-    global _corner_active, _passed_idx
-    corner = get_next_corner(route, cur_edge_idx)
-    if corner is None or corner["corner_idx"] <= _passed_idx:
+def get_guidance_mode(pos, cur_edge_idx, route, enter_dist=None):
+    global _corner_active
+    corner = get_next_corner(route, cur_edge_idx, pos)
+    if corner is None:
         _corner_active = False
         return "solid"
     remain = route_remaining_to_corner(pos, cur_edge_idx, route, corner)
-    if remain <= 2:
-        _passed_idx = corner["corner_idx"]
-        _corner_active = False
-        return "solid"
 
-    if not _corner_active and remain <= CORNER_ENTER_DIST:
+    enter = CORNER_ENTER_DIST if enter_dist is None else enter_dist
+    exit_d = enter + (CORNER_EXIT_DIST - CORNER_ENTER_DIST)
+    if not _corner_active and remain <= enter:
         _corner_active = True
-    elif _corner_active and remain >= CORNER_EXIT_DIST:
+    elif _corner_active and remain >= exit_d:
         _corner_active = False
 
     return blink_level(remain) if _corner_active else "solid"

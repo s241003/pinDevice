@@ -10,8 +10,8 @@
 # コードレビュー.md §8) による。20m・30秒・3回はいずれも提案値で、
 # 現場テスト (ステップ7) で確かめる前の値である。
 
-from main import REROUTE_THRESHOLD_M
 # --- 閾値 (提案値。現場テストで確かめること) ---
+REROUTE_THRESHOLD_M = 20
 REROUTE_CONFIRM_COUNT = 3       # 何回連続で超えたら再ルートするか
 REROUTE_MIN_INTERVAL_SEC = 30.0  # 再ルートと再ルートのあいだの最短間隔
 REROUTE_MAX_FAILURES = 3        # 連続で失敗したら再ルートを止める

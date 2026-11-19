@@ -1,19 +1,19 @@
-def whichSolenoid(angle,pinN=6):
+def whichSolenoid(angle, pinN):
     elevSoles=[]
     if angle<=22.5 or (angle>=337.5 and angle<=360):
-        elevSoles += [1,4] if pinN==6 else [4]
+        elevSoles += [1,4] if pinN==6 else [1,4]
     elif (angle>=22.5 and angle<=67.5):
-        elevSoles += [4] if pinN==6 else [6]
+        elevSoles += [4] if pinN==6 else [4]
     elif (angle>=67.5 and angle<=112.5):
-        elevSoles += [5] if pinN==6 else [7]
+        elevSoles += [5] if pinN==6 else [4,5]
     elif (angle>=112.5 and angle<=157.5):
-        elevSoles += [6] if pinN==6 else [8]
+        elevSoles += [6] if pinN==6 else [5]
     elif (angle>=157.5 and angle<=202.5):
-        elevSoles += [3,6] if pinN==6 else [5]
+        elevSoles += [3,6] if pinN==6 else [2,5]
     elif (angle>=202.5 and angle<=247.5):
-        elevSoles += [3] if pinN==6 else [3]
+        elevSoles += [3] if pinN==6 else [2]
     elif (angle>=247.5 and angle<=292.5):
-        elevSoles += [2] if pinN==6 else [2]
+        elevSoles += [2] if pinN==6 else [1,2]
     elif (angle>=292.5 and angle<=337.5):
         elevSoles += [1] if pinN==6 else [1]
     return elevSoles
